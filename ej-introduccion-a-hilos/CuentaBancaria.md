@@ -151,10 +151,10 @@ El uso del mecanismo de bloqueo garantiza que todas las operaciones sean atómic
 
 ## Conclusiones
 
-Este proyecto demuestra:
+Este ejercicio demuestra:
 1. El uso de hilos para simular operaciones concurrentes
 2. La implementación de mecanismos de sincronización (RLock) para proteger recursos compartidos
 3. La gestión adecuada de condiciones de error (intentar retirar más de lo disponible)
 4. La importancia de la sincronización en sistemas concurrentes
 
-Estos conceptos son fundamentales en la programación de sistemas distribuidos, aplicaciones multihilo y cualquier sistema que requiera coordinación entre múltiples procesos concurrentes.
+Estos conceptos son fundamentales en la programación de cualquier sistema que requiera coordinación entre múltiples procesos concurrentes.
