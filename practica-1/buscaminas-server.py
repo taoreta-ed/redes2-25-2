@@ -46,33 +46,40 @@ class BuscaminasServidor:
 
     def iniciar_servidor(self):
         """Inicia el servidor y espera la conexión de un cliente"""
-        self.servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.servidor_socket.bind((self.ip, self.puerto))
-        self.servidor_socket.listen(1)
-        
-        print(f"Servidor iniciado en {self.ip}:{self.puerto}")
-        print("Esperando la conexión del cliente...")
-        
-        self.cliente_socket, direccion_cliente = self.servidor_socket.accept()
-        print(f"Cliente conectado desde {direccion_cliente[0]}:{direccion_cliente[1]}")
-        
-        # Generar el tablero al recibir la conexión
-        self.generar_tablero()
-        
-        # Enviar confirmación y dificultad al cliente
-        mensaje_inicial = {
-            "tipo": "configuracion", 
-            "dificultad": self.dificultad, 
-            "filas": self.filas, 
-            "columnas": self.columnas
-        }
-        self.enviar_mensaje(mensaje_inicial)
-        
-        # Iniciar el tiempo de juego
-        self.tiempo_inicio = time.time()
-        
-        # Procesar movimientos del cliente
-        self.procesar_movimientos()
+        try:
+            self.servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.servidor_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.servidor_socket.bind((self.ip, self.puerto))
+            self.servidor_socket.listen(1)
+            
+            print(f"Servidor iniciado en {self.ip}:{self.puerto}")
+            print("Esperando la conexión del cliente...")
+            
+            self.cliente_socket, direccion_cliente = self.servidor_socket.accept()
+            print(f"Cliente conectado desde {direccion_cliente[0]}:{direccion_cliente[1]}")
+            
+            # Generar el tablero al recibir la conexión
+            self.generar_tablero()
+            
+            # Enviar confirmación y dificultad al cliente
+            mensaje_inicial = {
+                "tipo": "configuracion", 
+                "dificultad": self.dificultad, 
+                "filas": self.filas, 
+                "columnas": self.columnas
+            }
+            self.enviar_mensaje(mensaje_inicial)
+            
+            # Iniciar el tiempo de juego
+            self.tiempo_inicio = time.time()
+            
+            # Procesar movimientos del cliente
+            self.procesar_movimientos()
+            
+        except Exception as e:
+            print(f"Error al iniciar servidor: {e}")
+            if self.servidor_socket:
+                self.servidor_socket.close()
 
     def generar_tablero(self):
         """Genera el tablero con las minas colocadas aleatoriamente"""
@@ -113,13 +120,31 @@ class BuscaminasServidor:
 
     def enviar_mensaje(self, mensaje):
         """Envía un mensaje al cliente en formato JSON"""
-        mensaje_json = json.dumps(mensaje)
-        self.cliente_socket.send(mensaje_json.encode('utf-8'))
+        try:
+            mensaje_json = json.dumps(mensaje)
+            # Añadir delimitador de nueva línea para facilitar la lectura en el cliente
+            mensaje_json += '\n'
+            self.cliente_socket.sendall(mensaje_json.encode('utf-8'))
+            return True
+        except Exception as e:
+            print(f"Error al enviar mensaje: {e}")
+            return False
 
     def recibir_mensaje(self):
         """Recibe un mensaje del cliente en formato JSON"""
-        mensaje = self.cliente_socket.recv(1024).decode('utf-8')
-        return json.loads(mensaje)
+        try:
+            datos = self.cliente_socket.recv(1024)
+            if not datos:
+                raise Exception("Conexión cerrada por el cliente")
+                
+            mensaje = json.loads(datos.decode('utf-8'))
+            return mensaje
+        except json.JSONDecodeError as e:
+            print(f"Error al decodificar JSON: {e}")
+            raise
+        except Exception as e:
+            print(f"Error al recibir mensaje: {e}")
+            raise
 
     def procesar_movimientos(self):
         """Procesa los movimientos enviados por el cliente"""
@@ -132,7 +157,7 @@ class BuscaminasServidor:
                     columna = mensaje["columna"]
                     
                     # Validar movimiento
-                    resultado = self.validar_movimiento(fila, columna)
+                    self.validar_movimiento(fila, columna)
                     
                     # Verificar si el juego ha terminado
                     self.verificar_estado_juego()
@@ -146,8 +171,10 @@ class BuscaminasServidor:
                 break
         
         # Cerrar la conexión
-        self.cliente_socket.close()
-        self.servidor_socket.close()
+        if self.cliente_socket:
+            self.cliente_socket.close()
+        if self.servidor_socket:
+            self.servidor_socket.close()
         print("Conexión cerrada")
 
     def validar_movimiento(self, fila, columna):
@@ -173,11 +200,16 @@ class BuscaminasServidor:
                     if self.tablero[i][j] == -1:
                         self.tablero_visible[i][j] = '*'
             
+            # Crear una copia del tablero visible para enviar al cliente
+            tablero_para_cliente = []
+            for fila in self.tablero_visible:
+                tablero_para_cliente.append(fila.copy())
+            
             respuesta = {
                 "tipo": "control",
                 "estado": "mina_pisada",
                 "mensaje": "¡Has pisado una mina! Juego terminado.",
-                "tablero": self.tablero_visible
+                "tablero": tablero_para_cliente
             }
             self.enviar_mensaje(respuesta)
             

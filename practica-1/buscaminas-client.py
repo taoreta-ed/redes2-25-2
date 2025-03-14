@@ -14,6 +14,8 @@ class BuscaminasCliente:
         self.puerto_servidor = 0
         self.juego_terminado = False
         self.dificultad = ""
+        self.buffer = ""  # Buffer para almacenar datos recibidos
+        self.procesar_multiples_respuestas = False  # Flag para controlar el procesamiento de múltiples respuestas
 
     def conectar_servidor(self):
         """Establece la conexión con el servidor"""
@@ -38,32 +40,64 @@ class BuscaminasCliente:
 
     def recibir_configuracion(self):
         """Recibe la configuración inicial del juego"""
-        mensaje = self.recibir_mensaje()
-        
-        if mensaje["tipo"] == "configuracion":
-            self.dificultad = mensaje["dificultad"]
-            self.filas = mensaje["filas"]
-            self.columnas = mensaje["columnas"]
+        try:
+            mensaje = self.recibir_mensaje()
             
-            # Inicializar el tablero vacío
-            self.tablero = [['□' for _ in range(self.columnas)] for _ in range(self.filas)]
-            
-            print(f"Juego configurado con dificultad: {self.dificultad}")
-            print(f"Tablero de {self.filas}x{self.columnas}")
-        else:
-            print("Error: No se recibió configuración inicial")
-            self.desconectar()
-            sys.exit(1)
+            if mensaje["tipo"] == "configuracion":
+                self.dificultad = mensaje["dificultad"]
+                self.filas = mensaje["filas"]
+                self.columnas = mensaje["columnas"]
+                
+                # Inicializar el tablero vacío
+                self.tablero = [['□' for _ in range(self.columnas)] for _ in range(self.filas)]
+                
+                print(f"Juego configurado con dificultad: {self.dificultad}")
+                print(f"Tablero de {self.filas}x{self.columnas}")
+                return True
+            else:
+                print("Error: No se recibió configuración inicial")
+                return False
+        except Exception as e:
+            print(f"Error al recibir configuración: {e}")
+            return False
 
     def enviar_mensaje(self, mensaje):
         """Envía un mensaje al servidor en formato JSON"""
-        mensaje_json = json.dumps(mensaje)
-        self.cliente_socket.send(mensaje_json.encode('utf-8'))
+        try:
+            mensaje_json = json.dumps(mensaje)
+            self.cliente_socket.sendall(mensaje_json.encode('utf-8'))
+            return True
+        except Exception as e:
+            print(f"Error al enviar mensaje: {e}")
+            return False
 
     def recibir_mensaje(self):
         """Recibe un mensaje del servidor en formato JSON"""
-        mensaje = self.cliente_socket.recv(1024).decode('utf-8')
-        return json.loads(mensaje)
+        try:
+            # Si el buffer ya tiene un mensaje completo, extraerlo
+            if '\n' in self.buffer:
+                mensaje_json, self.buffer = self.buffer.split('\n', 1)
+                return json.loads(mensaje_json)
+            
+            # Si no hay mensaje completo, recibir más datos
+            while '\n' not in self.buffer:
+                datos = self.cliente_socket.recv(4096).decode('utf-8')
+                if not datos:
+                    raise Exception("Conexión cerrada por el servidor")
+                self.buffer += datos
+            
+            # Extraer un mensaje completo
+            mensaje_json, self.buffer = self.buffer.split('\n', 1)
+            return json.loads(mensaje_json)
+                
+        except json.JSONDecodeError as e:
+            print(f"Error al decodificar JSON: {e}")
+            print(f"Datos recibidos: {self.buffer}")
+            self.buffer = ""  # Limpiar buffer en caso de error
+            raise
+        except Exception as e:
+            print(f"Error al recibir mensaje: {e}")
+            raise
 
     def imprimir_tablero(self):
         """Imprime el estado actual del tablero"""
@@ -119,15 +153,27 @@ class BuscaminasCliente:
                     "fila": fila,
                     "columna": columna
                 }
-                self.enviar_mensaje(coordenada)
+                
+                if not self.enviar_mensaje(coordenada):
+                    print("Error al enviar coordenadas. Cerrando conexión.")
+                    self.desconectar()
+                    break
                 
                 # Procesar respuesta del servidor
-                self.procesar_respuesta()
+                self.procesar_multiples_respuestas = True
+                while self.procesar_multiples_respuestas:
+                    if not self.procesar_respuesta():
+                        break
                 
             except ValueError:
                 print("Entrada inválida. Ingrese un número.")
+                continue
             except KeyboardInterrupt:
                 print("\nJuego interrumpido por el usuario.")
+                self.desconectar()
+                break
+            except Exception as e:
+                print(f"Error inesperado: {e}")
                 self.desconectar()
                 break
         
@@ -139,41 +185,65 @@ class BuscaminasCliente:
 
     def procesar_respuesta(self):
         """Procesa la respuesta del servidor"""
-        mensaje = self.recibir_mensaje()
-        
-        if mensaje["tipo"] == "control":
-            if mensaje["estado"] == "casilla_ocupada":
-                print(mensaje["mensaje"])
-                time.sleep(1)
-                
-            elif mensaje["estado"] == "casilla_libre":
-                # Actualizar casilla en el tablero local
-                valor = mensaje["valor"]
-                fila = mensaje["fila"]
-                columna = mensaje["columna"]
-                
-                self.tablero[fila][columna] = str(valor) if valor > 0 else ' '
-                self.imprimir_tablero()
-                
-            elif mensaje["estado"] == "mina_pisada":
-                # El jugador ha perdido, actualizar tablero con todas las minas
-                self.tablero = mensaje["tablero"]
-                self.imprimir_tablero()
-                print(mensaje["mensaje"])
-                
-                # Esperar el mensaje final
-                self.procesar_respuesta()
-                
-        elif mensaje["tipo"] == "fin":
-            # Juego terminado
-            self.juego_terminado = True
+        try:
+            mensaje = self.recibir_mensaje()
             
-            if mensaje["resultado"] == "victoria":
-                print("¡FELICIDADES! ¡Has ganado!")
-            else:
-                print("¡BOOM! Has perdido.")
+            if mensaje["tipo"] == "control":
+                if mensaje["estado"] == "casilla_ocupada":
+                    print(mensaje["mensaje"])
+                    time.sleep(1)
+                    self.imprimir_tablero()  # Reimprimir tablero después del mensaje
+                    self.procesar_multiples_respuestas = False
+                    
+                elif mensaje["estado"] == "casilla_libre":
+                    # Actualizar casilla en el tablero local
+                    valor = mensaje["valor"]
+                    fila = mensaje["fila"]
+                    columna = mensaje["columna"]
+                    
+                    # Actualizar la casilla en el tablero local
+                    if valor == 0:
+                        self.tablero[fila][columna] = ' '
+                    else:
+                        self.tablero[fila][columna] = str(valor)
+                    
+                    self.imprimir_tablero()
+                    
+                    # Solo seguir procesando respuestas para la casilla actual y sus adyacentes
+                    # Si hay más mensajes en el buffer, procesarlos
+                    if '\n' not in self.buffer:
+                        self.procesar_multiples_respuestas = False
+                    
+                elif mensaje["estado"] == "mina_pisada":
+                    # El jugador ha perdido, actualizar tablero con todas las minas
+                    for i in range(self.filas):
+                        for j in range(self.columnas):
+                            if mensaje["tablero"][i][j] == '*':
+                                self.tablero[i][j] = '*'
+                    
+                    self.imprimir_tablero()
+                    print(mensaje["mensaje"])
+                    self.procesar_multiples_respuestas = True  # Para procesar el mensaje de fin
+                    
+            elif mensaje["tipo"] == "fin":
+                # Juego terminado
+                self.juego_terminado = True
+                self.procesar_multiples_respuestas = False
                 
-            print(f"Duración del juego: {mensaje['duracion']} segundos")
+                if mensaje["resultado"] == "victoria":
+                    print("¡FELICIDADES! ¡Has ganado!")
+                else:
+                    print("¡BOOM! Has perdido.")
+                    
+                print(f"Duración del juego: {mensaje['duracion']} segundos")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            print(f"Error al procesar respuesta: {e}")
+            self.procesar_multiples_respuestas = False
+            return False
 
     def desconectar(self):
         """Cierra la conexión con el servidor"""
